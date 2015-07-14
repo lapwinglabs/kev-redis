@@ -1,0 +1,29 @@
+{
+  "name": "kev-redis",
+  "version": "0.0.1",
+  "description": "redis adapter for kev",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lapwinglabs/kev-redis"
+  },
+  "keywords": [
+    "redis",
+    "key",
+    "value",
+    "storage",
+    "db"
+  ],
+  "author": "Lapwing Labs",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/lapwinglabs/kev-redis/issues"
+  },
+  "homepage": "https://github.com/lapwinglabs/kev-redis",
+  "dependencies": {
+    "redis": "^0.12.1"
+  }
+}
