@@ -2,7 +2,7 @@ var Kev = require('kev')
 var KevRedis = require('../index.js')
 var assert = require('assert')
 
-var kevredis = Kev({ store: KevRedis( { port: process.env.REDIS_PORT } ) })
+var kevredis = Kev({ store: KevRedis( { port: process.env.REDIS_PORT, ttl: 5 } ) })
 
 var kevs = [kevredis]
 
@@ -14,8 +14,18 @@ kevs.forEach(function(kev) {
         assert.equal(old, 'value1')
         kev.get('key1', function(err, value) {
           assert.equal(value, null)
-          kev.close()
-          console.log('Pass!')
+          kev.put('key2', 'to-expire', function(err, value) {
+            kev.get('key2', function(err, value) {
+              assert.equal(value, 'to-expire')
+              setTimeout(function() {
+                kev.get('key2', function(err, value) {
+                  assert.equal(value, null)
+                  kev.close()
+                  console.log('Pass!')
+                })
+              }, 6000)
+            })
+          })
         })
       })
     })

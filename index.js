@@ -9,6 +9,7 @@ var KevRedis = module.exports = function KevRedis(options) {
   var client = redis.createClient(options.port, options.host, options)
 
   this.pendingOps = []
+  this.ttl = options.ttl
   var self = this
   client.on('connect', function() {
     self.storage = client;
@@ -29,7 +30,10 @@ KevRedis.prototype.get = function(key, done) {
 KevRedis.prototype.put = function(key, value, done) {
   if (!this.storage) return this.pendingOps.push(this.put.bind(this, key, value, done))
 
+  var ttl = this.ttl
+  var storage = this.storage
   this.storage.getset(key, pack(value), function(err, result) {
+    if (ttl) storage.expire(key, ttl)
     if (done) done(err, unpack(result))
   })
 }
