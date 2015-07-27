@@ -1,6 +1,6 @@
 {
   "name": "kev-redis",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "redis adapter for kev",
   "main": "index.js",
   "scripts": {
