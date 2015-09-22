@@ -24,11 +24,12 @@
   },
   "homepage": "https://github.com/lapwinglabs/kev-redis",
   "dependencies": {
-    "redis": "^0.12.1"
+    "bluebird": "2.10.1",
+    "redis": "2.0.0"
   },
   "devDependencies": {
     "kev": "0.1.0",
-    "prok": "0.0.4",
+    "prok": "0.0.6",
     "prok-wait": "0.0.3"
   }
 }

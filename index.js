@@ -22,9 +22,19 @@ var KevRedis = module.exports = function KevRedis(options) {
 KevRedis.prototype.get = function(key, done) {
   if (!this.storage) return this.pendingOps.push(this.get.bind(this, key, done))
 
-  this.storage.get(key, function(err, result) {
-    done(err, unpack(result))
-  })
+  if (Array.isArray(key)) {
+    var out = {}
+    this.storage.mget(key, function (err, result) {
+      result.forEach(function (v, idx) {
+        out[key[idx]] = unpack(v)
+      })
+      done(err, out)
+    })
+  } else {
+    this.storage.get(key, function(err, result) {
+      done(err, unpack(result))
+    })
+  }
 }
 
 KevRedis.prototype.put = function(key, value, done) {

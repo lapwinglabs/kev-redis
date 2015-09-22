@@ -1,6 +1,6 @@
 DBPATH := test/db/redis
 
-test: node_modules_test $(DBPATH) install-redis
+test: $(DBPATH) install-redis
 		@LOG=test* ./node_modules/.bin/prok \
 		--env test/env.test \
 		--procfile test/Procfile.test \
