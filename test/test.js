@@ -5,19 +5,38 @@ var KevRedis = require('../index.js')
 var Promise = require('bluebird')
 var assert = require('assert')
 
-var core = KevRedis({
-  port: process.env.REDIS_PORT,
-  ttl: 5
-})
+var core = Promise.promisifyAll(KevRedis({ port: process.env.REDIS_PORT }))
+var ttl = Promise.promisifyAll(KevRedis({ port: process.env.REDIS_PORT, ttl: 5 }))
+var compressed = Promise.promisifyAll(KevRedis({ port: process.env.REDIS_PORT, compress: true }))
+var tags = Promise.promisifyAll(Kev({ store: KevRedis({ port: process.env.REDIS_PORT, prefix: 'tags' }) }))
 
-var compressed = KevRedis({
-  port: process.env.REDIS_PORT,
-  ttl: 5,
-  compress: true
+core.drop('*', () => {
+  Promise.resolve()
+    .then(() => core.dropAsync('*'))
+    .then(() => test_core(core))
+    .then(() => ttl.dropAsync('*'))
+    .then(() => test_ttl(ttl))
+    .then(() => compressed.dropAsync('*'))
+    .then(() => test_core(compressed))
+    .then(() => {
+      return tags.putAsync('tagged', 'value')
+        .then(() => tags.tagAsync('tagged', ['drop', 'pord']))
+        .then(() => tags.putAsync('other', 'value'))
+        .then(() => tags.tagAsync('other', 'pord'))
+        .then(() => tags.store.storage.smembersAsync('tags:_tagKeys:drop'))
+        .then((keys) => assert.deepEqual(keys, ['tags:tagged']))
+        .then(() => tags.store.storage.smembersAsync('tags:_tagKeys:pord'))
+        .then((keys) => assert.deepEqual(keys.sort(), ['tags:tagged', 'tags:other'].sort()))
+        .then(() => tags.store.storage.smembersAsync('tags:_keyTags:tagged'))
+        .then((keys) => assert.deepEqual(keys.sort(), ['drop', 'pord'].sort()))
+        .then(() => tags.dropTagAsync('drop'))
+        .then(() => tags.store.storage.smembersAsync('tags:_tagKeys:drop'))
+        .then((keys) => assert.deepEqual(keys, []))
+        .then(() => tags.store.storage.smembersAsync('tags:_tagKeys:pord'))
+        .then((keys) => assert.deepEqual(keys, ['tags:other']))
+        .then(() => tags.store.storage.smembersAsync('tags:_keyTags:tagged'))
+        .then((keys) => assert.deepEqual(keys, []))
+        .then(() => tags.closeAsync())
+        .then(() => console.log('TAGS PASSED'))
+    })
 })
-
-Promise.resolve()
-  .then(() => test_core(core))
-  .then(() => test_ttl(core))
-  .then(() => test_core(compressed))
-  .then(() => test_ttl(compressed))

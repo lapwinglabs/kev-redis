@@ -18,7 +18,7 @@ var KevRedis = module.exports = function KevRedis (options) {
 
   if (options.ttl) options.ttl = seconds(String(options.ttl))
   if (options.prefix) options.prefix = options.prefix + ':'
-  else options.prefix = ''
+  else options.prefix = 'kev:'
   this.options = options
 
   this.pendingOps = []
@@ -32,8 +32,8 @@ var KevRedis = module.exports = function KevRedis (options) {
 
 KevRedis.prototype.get = function (keys, done) {
   if (!this.storage) return this.pendingOps.push(this.get.bind(this, keys, done))
-  keys = keys.map((k) => this.options.prefix + k)
-  this.storage.mgetAsync(keys)
+  var prefixed = keys.map((k) => this.options.prefix + k)
+  this.storage.mgetAsync(prefixed)
     .reduce((out, v, idx) => { out[keys[idx]] = unpack(this.options.compress)(v); return out }, {})
     .props()
     .then((out) => done && done(null, out))
@@ -43,12 +43,12 @@ KevRedis.prototype.get = function (keys, done) {
 KevRedis.prototype.put = function (keys, options, done) {
   if (!this.storage) return this.pendingOps.push(this.put.bind(this, keys, options, done))
 
-  var ttl = options.ttl || this.options.ttl
+  var ttl = options.ttl ? seconds(String(options.ttl)) : this.options.ttl
   for (var key in keys) {
-    key = this.options.prefix + key
+    var prefixed = this.options.prefix + key
     keys[key] = pack(this.options.compress)(keys[key])
-      .then((v) => this.storage.getsetAsync(key, v))
-      .tap((v) => ttl && this.storage.expire(key, ttl))
+      .then((v) => this.storage.getsetAsync(prefixed, v))
+      .tap((v) => ttl && this.storage.expire(prefixed, ttl))
       .then(unpack(this.options.compress))
   }
 
@@ -58,29 +58,104 @@ KevRedis.prototype.put = function (keys, options, done) {
 }
 
 KevRedis.prototype.del = function (keys, done) {
-  keys = keys.map((k) => this.options.prefix + k)
   if (!this.storage) return this.pendingOps.push(this.del.bind(this, keys, done))
+  var prefixed = keys.map((k) => this.options.prefix + k)
 
-  this.storage.multi().mget(keys).del(keys).execAsync()
-    .then((out) => out[0])
-    .reduce((p, c, i) => { p[keys[i]] = unpack(this.options.compress)(c); return p }, {})
-    .props()
+  var try_del = (key) => {
+    this.storage.watch(key)
+    return this.storage.getAsync(key).then((old) => {
+      return this._delete(key, this.storage.multi())
+        .then((op) => op.execAsync())
+        .then((replies) => {
+          if (!replies) return Promise.delay(100).then(() => try_del(key))
+          else return unpack(this.options.compress)(old)
+        })
+    })
+  }
+
+  Promise.resolve(prefixed)
+    .mapSeries(try_del)
+    .reduce((p, c, i) => { p[keys[i]] = c; return p }, {})
     .then((v) => done && done(null, v))
     .catch((e) => done && done(e))
 }
 
 KevRedis.prototype.drop = function (pattern, done) {
-  pattern = this.options.prefix + pattern
   if (!this.storage) return this.pendingOps.push(this.drop.bind(this, pattern, done))
-  this.storage.evalAsync(
-    `local keys = redis.call('keys', '${pattern}') \n` +
-    `for i=1,#keys,5000 do \n` +
-    `  redis.call('del', unpack(keys, i, math.min(i+4999, #keys))) \n` +
-    `end \n` +
-    `return keys`
-  , 0)
-  .then((keys) => done && done(null, keys.length))
-  .catch((e) => done && done(null, err))
+  pattern = this.options.prefix + pattern
+
+  var try_drop_key = (key) => {
+    return this._delete(key, this.storage.multi())
+      .then((op) => op.execAsync())
+      .then((replies) => {
+        if (!replies) return Promise.delay(100).then(() => try_drop_key(key))
+        else return replies[0]
+      })
+  }
+
+  this.storage.keysAsync(pattern).mapSeries(try_drop_key)
+    .reduce((count, deleted) => count + deleted, 0)
+    .then((count) => done && done(null, count))
+    .catch((e) => done && done(e))
+}
+
+KevRedis.prototype.tag = function (key, tags, done) {
+  if (!this.storage) return this.pendingOps.push(this.tag.bind(this, key, tags, done))
+
+  var keyTags = this.options.prefix + '_keyTags:' + key
+  key = this.options.prefix + key
+
+  var try_tag = (key, tags) => {
+    var op = this.storage.multi()
+    return Promise.resolve(tags)
+      .reduce((op, tag) => {
+        var tagKeys = this.options.prefix + '_tagKeys:' + tag
+        return op.sadd(keyTags, tag).sadd(tagKeys, key)
+      }, this.storage.multi())
+      .then((op) => op.execAsync())
+      .then((replies) => {
+        if (!replies) return Promise.delay(100).then(() => try_tag(key, tags))
+      })
+  }
+
+  try_tag(key, tags)
+    .then(() => done && done())
+    .catch((e) => done && done(e))
+}
+
+KevRedis.prototype.dropTag = function (tags, done) {
+  if (!this.storage) return this.pendingOps.push(this.dropTag.bind(this, tags, done))
+
+  var try_drop_tag = (tag) => {
+    var tagKeys = this.options.prefix + '_tagKeys:' + tag
+    this.storage.watch(tagKeys)
+
+    var dropped_keys = []
+    return this.storage.smembersAsync(tagKeys).reduce((op, key) => {
+        if (!~dropped_keys.indexOf(key)) dropped_keys.push(key)
+        return this._delete(key, op)
+      }, this.storage.multi().del(tagKeys))
+      .then((op) => op.execAsync())
+      .then((replies) => {
+        if (!replies) return Promise.delay(100).then(() => try_drop_tag(tag))
+        else return dropped_keys
+      })
+      .catch((err) => { console.error('KEV REDIS: Error dropping tag', tag, ':', err); throw err })
+  }
+
+  Promise.resolve(tags).reduce((count, tag) => try_drop_tag(tag), 0)
+    .then((keys) => done && done(null, keys.length))
+    .catch((e) => done && done(null, err))
+}
+
+KevRedis.prototype._delete = function (key, op) {
+  var keyTags = this.options.prefix + '_keyTags:' + key.slice(this.options.prefix.length)
+  this.storage.watch(keyTags)
+  op = op.del(key).del(keyTags)
+  return this.storage.smembersAsync(keyTags).reduce((op, otherTag) => {
+    var tagKeys = this.options.prefix + '_tagKeys:' + otherTag
+    return op.srem(tagKeys, key)
+  }, op)
 }
 
 KevRedis.prototype.close = function (done) {
