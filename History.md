@@ -1,4 +1,9 @@
 
+0.5.1 / 2016-03-11
+==================
+
+  * support custom packing and resurrect control
+
 0.5.0 / 2016-03-11
 ==================
 
