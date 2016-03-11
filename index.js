@@ -2,6 +2,7 @@ var Promise = require('bluebird')
 var seconds = require('juration').parse
 var resurrect = require('./resurrect')()
 var zlib = require('zlib')
+var assign = require('deep-assign')
 
 var Redis = require('redis')
 Promise.promisifyAll(Redis.RedisClient.prototype)
@@ -30,11 +31,15 @@ var KevRedis = module.exports = function KevRedis (options) {
   })
 }
 
-KevRedis.prototype.get = function (keys, done) {
+KevRedis.prototype.get = function (keys, options, done) {
   if (!this.storage) return this.pendingOps.push(this.get.bind(this, keys, done))
   var prefixed = keys.map((k) => this.options.prefix + k)
+  options = assign({}, this.options, options)
   this.storage.mgetAsync(prefixed)
-    .reduce((out, v, idx) => { out[keys[idx]] = unpack(this.options.compress)(v); return out }, {})
+    .reduce((out, v, idx) => {
+      out[keys[idx]] = unpack(options.compress)(v)
+      return out
+    }, {})
     .props()
     .then((out) => done && done(null, out))
     .catch((err) => done && done(err))
@@ -171,9 +176,11 @@ function pack (compress) {
     if (!compress) {
       setImmediate(() => done(null, resurrect.stringify(value)))
     } else {
-      zlib.deflate(resurrect.stringify(value), compress, (err, buf) => {
+      var fn = compress.type === 'gzip' ? 'gzip' : 'deflate'
+      var encoding = compress.encoding || 'base64'
+      zlib[fn](resurrect.stringify(value), compress, (err, buf) => {
         if (err) done(err)
-        else done(null, buf.toString('base64'))
+        else done(null, buf.toString(encoding))
       })
     }
   })
@@ -185,7 +192,10 @@ function unpack (compress) {
     if (!compress) {
       setImmediate(() => done(null, resurrect.resurrect(value)))
     } else {
-      zlib.inflate(new Buffer(value, 'base64'), compress, (err, val) => {
+      if (compress.raw) return setImmediate(() => done(null, value))
+      var fn = compress.type === 'gzip' ? 'gunzip' : 'inflate'
+      var encoding = compress.encoding || 'base64'
+      zlib[fn](new Buffer(value, encoding), compress, (err, val) => {
         if (err) done(err)
         else done(null, resurrect.resurrect(val.toString()))
       })
