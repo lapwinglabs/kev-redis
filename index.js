@@ -1,6 +1,6 @@
 var Promise = require('bluebird')
 var seconds = require('juration').parse
-var resurrect = require('./resurrect')()
+var Resurrector = require('./resurrect')
 var zlib = require('zlib')
 var assign = require('deep-assign')
 
@@ -22,6 +22,19 @@ var KevRedis = module.exports = function KevRedis (options) {
   else options.prefix = 'kev:'
   this.options = options
 
+  this.options = options
+  var restore = options.restoreTypes || {}
+  if (restore.pack && restore.unpack) {
+    this.options.restore = restore
+  } else if (restore.resurrect) {
+    var resurrect = new Resurrector(restore.resurrect)
+    this.options.restore = { pack: resurrect.stringify.bind(resurrect), unpack: resurrect.resurrect.bind(resurrect) }
+  } else if (this.options.compress) {
+    this.options.restore = { pack: (v) => v, unpack: (v) => v }
+  } else {
+    this.options.restore = { pack: JSON.stringify, unpack: JSON.parse }
+  }
+
   this.pendingOps = []
   client.on('connect', () => {
     this.storage = client;
@@ -37,7 +50,7 @@ KevRedis.prototype.get = function (keys, options, done) {
   options = assign({}, this.options, options)
   this.storage.mgetAsync(prefixed)
     .reduce((out, v, idx) => {
-      out[keys[idx]] = unpack(options.compress)(v)
+      out[keys[idx]] = unpack(options.compress, options.restore)(v)
       return out
     }, {})
     .props()
@@ -51,10 +64,10 @@ KevRedis.prototype.put = function (keys, options, done) {
   var ttl = options.ttl ? seconds(String(options.ttl)) : this.options.ttl
   for (var key in keys) {
     var prefixed = this.options.prefix + key
-    keys[key] = pack(this.options.compress)(keys[key])
+    keys[key] = pack(this.options.compress, this.options.restore)(keys[key])
       .then((v) => this.storage.getsetAsync(prefixed, v))
       .tap((v) => ttl && this.storage.expire(prefixed, ttl))
-      .then(unpack(this.options.compress))
+      .then(unpack(this.options.compress, this.options.restore))
   }
 
   Promise.props(keys)
@@ -73,7 +86,7 @@ KevRedis.prototype.del = function (keys, done) {
         .then((op) => op.execAsync())
         .then((replies) => {
           if (!replies) return Promise.delay(100).then(() => try_del(key))
-          else return unpack(this.options.compress)(old)
+          else return unpack(this.options.compress, this.options.restore)(old)
         })
     })
   }
@@ -170,15 +183,15 @@ KevRedis.prototype.close = function (done) {
   this.storage.quit()
 }
 
-function pack (compress) {
+function pack (compress, restore) {
   return Promise.promisify((value, done) => {
-    if (!value) return setImmediate(done)
+    if (!value) return setImmediate(() => done(null, null))
     if (!compress) {
-      setImmediate(() => done(null, resurrect.stringify(value)))
+      setImmediate(() => done(null, restore.pack(value)))
     } else {
       var fn = compress.type === 'gzip' ? 'gzip' : 'deflate'
       var encoding = compress.encoding || 'base64'
-      zlib[fn](resurrect.stringify(value), compress, (err, buf) => {
+      zlib[fn](JSON.stringify(restore.pack(value)), compress, (err, buf) => {
         if (err) done(err)
         else done(null, buf.toString(encoding))
       })
@@ -186,18 +199,18 @@ function pack (compress) {
   })
 }
 
-function unpack (compress) {
+function unpack (compress, restore) {
   return Promise.promisify((value, done) => {
-    if (!value) return setImmediate(done)
+    if (!value) return setImmediate(() => done(null, null))
     if (!compress) {
-      setImmediate(() => done(null, resurrect.resurrect(value)))
+      setImmediate(() => done(null, restore.unpack(value)))
     } else {
       if (compress.raw) return setImmediate(() => done(null, value))
       var fn = compress.type === 'gzip' ? 'gunzip' : 'inflate'
       var encoding = compress.encoding || 'base64'
       zlib[fn](new Buffer(value, encoding), compress, (err, val) => {
         if (err) done(err)
-        else done(null, resurrect.resurrect(val.toString()))
+        else done(null, restore.unpack(JSON.parse(val.toString())))
       })
     }
   })
