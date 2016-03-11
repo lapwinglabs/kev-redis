@@ -1,4 +1,10 @@
 
+0.5.0 / 2016-03-11
+==================
+
+  * add raw retrieval and support for gzip
+  * add tag/tagDrop and upgrade to kev 0.3.0 compat
+
 0.3.0 / 2016-03-10
 ==================
 
